@@ -1,162 +1,265 @@
-# Secure-by-Design Recommendations
+# HeliOS Studio Secure-by-Design Blueprint
 
-> **Review Date:** 2026-03-09  
-> **Scope Reviewed:** `README.md`, `docs/ARCHITECTURE.md`, `docs/TOOL_STACK.md`, `docs/INTEGRATIONS.md`, `docs/MCP.md`, `docs/WORKFLOWS.md`, `docs/SECURITY.md`
+> **Objective:** Design the full HeliOS ecosystem so security is an architectural property (not an afterthought) across MCP, n8n, GitHub, local models, and cloud APIs.
 
-This document captures practical, prioritized security improvements for HeliOS Studio based on the current architecture (MCP-enabled agents, n8n automation, GitHub-centric workflows, and hybrid local/cloud AI tooling).
-
----
-
-## Executive Summary
-
-The project already has strong security foundations: identity separation, network segmentation, least-privilege guidance, and data classification are clearly documented. The highest residual risks are primarily from **integration edges**:
-
-1. **Token handling in local configs and automation glue** (MCP server env vars, webhook/API credentials).
-2. **Trust of third-party/unofficial MCP servers** (especially NotebookLM ecosystem and fast-moving MCP registries).
-3. **Insufficient policy-as-code enforcement** (many controls are documented but not yet continuously verified).
-4. **Automation blast radius** (n8n + GitHub + MCP chains can execute broad actions quickly if abused).
-
-Focus first on moving from guidance to enforced controls (guardrails, CI checks, scoped credentials, and runtime isolation).
+This blueprint is tied to the planned stack and interactions described in `ARCHITECTURE.md`, `INTEGRATIONS.md`, `MCP.md`, `WORKFLOWS.md`, and `SECURITY.md`.
 
 ---
 
-## Priority Recommendations
+## 1) Security Architecture for the Planned System
 
-## P0 (Do now)
+### 1.1 Trust Zones (enforce explicitly)
 
-### 1) Standardize secret handling for MCP and automation
+Define and enforce these zones in network, identity, and runtime policy:
 
-**Why:** Multiple integration examples use direct env token injection patterns; this is operationally convenient but high risk if machine/account is compromised.
+1. **Zone A – Studio Control Plane**
+   - Claude Desktop / Claude Code
+   - Cursor / VS Code
+   - Local workstation + studio browser profile
+   - Highest operator privileges
 
-**Recommendations:**
-- Move all long-lived tokens to a secrets manager (Vault/Bitwarden Secrets/etc.) and inject at runtime.
-- Prefer short-lived credentials where providers support it (OIDC, app tokens, rotating session tokens).
-- Add mandatory secret scanning pre-commit and in CI (e.g., `gitleaks`/`trufflehog`).
-- Add a `*.example` config pattern and block committed real configs via CI policy.
+2. **Zone B – Automation Plane**
+   - n8n + webhook ingress
+   - Orchestration logic and scheduled jobs
+   - Medium-high privilege, highest automation blast radius
 
-**Success criteria:**
-- No plaintext high-value tokens in local JSON/yaml configs.
-- Secret scan runs on every PR and push.
+3. **Zone C – Tooling/Data Plane**
+   - MCP servers (filesystem, GitHub, n8n, Obsidian, NotebookLM)
+   - Ollama runtime and model endpoints
+   - Direct data read/write paths
 
-### 2) Enforce MCP trust policy (allowlist + pinning + review)
+4. **Zone D – External Service Plane**
+   - GitHub Cloud APIs
+   - Perplexity, Anthropic, NotebookLM/Apify, Slack, other SaaS
+   - Untrusted by default, egress controlled
 
-**Why:** MCP ecosystem growth increases supply-chain risk and inconsistent quality.
+5. **Zone E – Sensitive/Restricted Data Plane**
+   - Secrets managers, backup snapshots, incident artifacts
+   - Must be inaccessible to general-purpose agents by default
 
-**Recommendations:**
-- Maintain an explicit server allowlist with owner, source URL, commit/tag pin, and risk tier.
-- Pin MCP server versions (or commit SHAs) and avoid floating installs.
-- Require a lightweight security review before adding any new MCP server (permissions, network egress, update cadence).
-- For unofficial servers, run in isolated containers with read-only FS and no host-level credential exposure.
-
-**Success criteria:**
-- New MCP servers cannot be added without metadata + approval.
-- All installed MCP servers are version-pinned.
-
-### 3) Harden n8n and webhook ingress
-
-**Why:** n8n is the automation control plane; webhook abuse can trigger privileged actions.
-
-**Recommendations:**
-- Require signed webhooks (HMAC) and replay protection (timestamp + nonce).
-- Place n8n behind an authenticated reverse proxy with IP allowlists where feasible.
-- Separate public ingress workflows from privileged internal workflows.
-- Add per-workflow risk labels and approval gates for destructive actions.
-
-**Success criteria:**
-- All incoming webhooks are authenticated and replay-protected.
-- Privileged workflows are not directly internet-triggerable.
+### Required baseline
+- **Default deny** between zones (allowlist only required paths).
+- **Different identities per zone/service** (no shared admin tokens).
+- **Cryptographic webhook/API authentication** at every cross-zone hop.
 
 ---
 
-## P1 (Next 30 days)
+### 1.2 Critical Trust Boundaries in HeliOS Flows
 
-### 4) Convert security guidance into policy-as-code
+These boundaries must be treated as attack surfaces:
 
-**Recommendations:**
-- Add repo guardrails:
-  - CODEOWNERS for security-sensitive docs/config.
-  - branch protection + required checks.
-  - dependency scanning + Dependabot + pinned action SHAs.
-- Add validation scripts for:
-  - forbidden path scopes in filesystem MCP config.
-  - forbidden token patterns in docs/config.
-  - required security headers/settings in deployment templates.
-
-### 5) Introduce an AI action authorization model
-
-**Recommendations:**
-- Define action classes: `read`, `write`, `external_call`, `destructive`.
-- Require human confirmation for `external_call` to unknown endpoints and any destructive action.
-- Implement dual-control for production-impacting actions (e.g., deploy, delete, permission changes).
-
-### 6) Build a minimum security telemetry baseline
-
-**Recommendations:**
-- Log tool-call audit trails with correlation IDs across Claude/MCP/n8n/GitHub actions.
-- Alert on anomalies: off-hours write bursts, token spend spikes, new MCP server executions.
-- Set retention + integrity expectations for logs used in incident response.
+- `GitHub Webhook -> n8n` (payload authenticity + replay prevention)
+- `n8n -> Claude API / Perplexity / Apify` (data exfil and prompt injection)
+- `Claude Desktop/Code -> MCP Servers` (tool overreach and privilege abuse)
+- `MCP filesystem -> local repo/vault` (path traversal and unintended writes)
+- `n8n/MCP -> GitHub write actions` (supply-chain tampering)
+- `NotebookLM unofficial MCP / Apify` (third-party trust + token theft)
 
 ---
 
-## P2 (Next 60-90 days)
+## 2) Threat Model Expansion (AI-Forward, 2026+)
 
-### 7) Strengthen runtime isolation by default
+In addition to classic threats, explicitly model AI-native threats:
 
-**Recommendations:**
-- Run MCP services rootless and read-only where possible.
-- Apply network egress policies per service (deny-by-default + explicit allowlist).
-- Use separate service identities for each integration path (GitHub, n8n, NotebookLM, Obsidian).
+1. **Prompt injection across tool chains**
+   - Malicious issue/comment/page causes agent to perform privileged operations.
 
-### 8) Formalize data governance for AI workflows
+2. **Context poisoning / retrieval poisoning**
+   - Untrusted docs in NotebookLM/Obsidian/GitHub alter agent decision quality.
 
-**Recommendations:**
-- Add machine-checkable data labels: `public`, `internal`, `restricted`, `prohibited-for-cloud`.
-- Enforce routing rules (e.g., `restricted` only to local models).
-- Add mandatory redaction step for logs/prompts entering third-party LLM APIs.
+3. **Agent tool escalation**
+   - Benign workflow triggers hidden write/delete/external-call capability.
 
-### 9) Add tabletop exercises and break-glass runbooks
+4. **Model supply-chain and jailbreak drift**
+   - New model behavior bypasses existing safeguards after version updates.
 
-**Recommendations:**
-- Run quarterly simulation scenarios:
-  - leaked API token,
-  - malicious MCP update,
-  - prompt injection triggering unsafe automation.
-- Maintain tested break-glass procedures with timed recovery objectives.
+5. **Autonomous loop abuse**
+   - Scheduled/recursive workflows create high-speed destructive propagation.
+
+6. **Indirect exfiltration**
+   - Secrets encoded into logs, summaries, commit messages, or downstream payloads.
 
 ---
 
-## Tool & Integration Specific Hardening
+## 3) Secure-by-Design Control Pattern (Mandatory)
 
-| Component | Main Risk | Recommended Hardening |
-|---|---|---|
-| Claude Desktop + MCP | Over-broad tool permissions | Per-server least privilege, tool allowlists, high-risk action approvals |
-| n8n | Workflow abuse, webhook spoofing | Signed webhooks, segmented workflow zones, scoped credentials |
-| GitHub | Token over-permission, CI supply chain | GitHub App/fine-grained tokens, required reviews, pinned action SHAs |
-| NotebookLM (unofficial MCP) | Unofficial API/server trust | Sandbox execution, strict scopes, faster rotation, separate identity |
-| Obsidian MCP | Local file exposure | Dedicated vault path, read-only mode where possible, path allowlists |
-| Self-hosted runners | Lateral movement | Ephemeral runners, isolated network, one-job tokens |
+Every integration and workflow should implement this control pattern:
+
+`Authenticate -> Authorize -> Validate -> Execute in Sandbox -> Observe -> Recover`
+
+### 3.1 Authenticate
+- Signed webhooks (HMAC-SHA256), timestamp + nonce replay window.
+- mTLS or equivalent service auth for internal service-to-service traffic where feasible.
+- OIDC/workload identity over static tokens whenever possible.
+
+### 3.2 Authorize
+- Policy engine for action classes: `read`, `write`, `external_call`, `destructive`.
+- Human approval gates for:
+  - destructive operations,
+  - production deploys,
+  - new external endpoints,
+  - permission or credential changes.
+
+### 3.3 Validate
+- Treat all upstream content as untrusted (issues, PR comments, web content, notebook text).
+- Strict JSON schema validation for webhook and tool payloads.
+- Allowlist command templates and endpoint destinations.
+
+### 3.4 Execute in Sandbox
+- MCP servers in containers, rootless, read-only FS, seccomp/apparmor.
+- Per-server network egress allowlists.
+- Filesystem MCP restricted to explicit directories only.
+
+### 3.5 Observe
+- End-to-end trace ID across GitHub -> n8n -> AI -> MCP -> GitHub.
+- Log decision prompts, tool invocations, target resources, and approvals.
+- Alert on anomalies (off-hours writes, token spikes, new server binaries).
+
+### 3.6 Recover
+- One-click key revocation + rotation playbooks.
+- Automated containment (disable workflow/token/server on anomaly severity threshold).
+- Snapshot/restore tested for n8n, MCP infra, and repos.
 
 ---
 
-## Suggested Security Backlog (Implementation Ready)
+## 4) Tool-by-Tool Hardening Requirements
 
-1. Add `SECURITY_BASELINE.md` with required controls and verification cadence.
-2. Add CI job: secret scanning + dependency vulnerability scanning + policy checks.
-3. Add `mcp-allowlist.json` (owner, version pin, scopes, review date, risk tier).
-4. Add webhook verification middleware/template for n8n-trigger endpoints.
-5. Add `docs/INCIDENT_RUNBOOKS.md` with step-by-step key compromise and prompt-injection response.
-6. Add quarterly review template issue for access recertification and stale credential cleanup.
+### 4.1 MCP Ecosystem
+
+### Minimum controls
+- Maintain `mcp-allowlist` inventory with owner, repo URL, version pin/SHA, permissions, last review date, risk tier.
+- No unreviewed MCP server installation in production environment.
+- Block floating installs (`latest`, unpinned `npx -y` in production contexts).
+
+### Unofficial MCP (NotebookLM especially)
+- Isolate to dedicated container/VM and dedicated low-privilege account.
+- Separate tokens from core studio GitHub/n8n credentials.
+- Faster rotation cadence (monthly) and stricter monitoring.
+
+### 4.2 n8n (Automation Hub)
+
+### Minimum controls
+- Separate **public ingress workflows** from **privileged internal workflows**.
+- All webhook triggers must pass signature + replay validation node before business logic.
+- Store credentials in encrypted secret store only; never in workflow JSON exports.
+- Add kill-switch workflow to disable high-risk automations quickly.
+
+### High-risk workflow controls
+- Require manual approval node for destructive writes/deploys.
+- Concurrency + rate limits to prevent automation storms.
+- Destination allowlists for HTTP Request nodes.
+
+### 4.3 GitHub (Source of Truth + CI/CD)
+
+### Minimum controls
+- Prefer GitHub Apps/fine-grained tokens over classic PATs.
+- Enforce branch protection, required reviews, status checks, signed commits/tags where possible.
+- Pin GitHub Actions by commit SHA; enable Dependabot and code/dependency scanning.
+- For self-hosted runners, use ephemeral runners and one-job credentials.
+
+### 4.4 Claude/Cursor Agent Paths
+
+### Minimum controls
+- Explicit tool allowlist by agent persona/workflow.
+- Prompt boundary hardening: separate system policy from untrusted user/retrieved content.
+- Block direct execution of generated shell commands without policy validation.
+- Require confirmation for operations crossing trust zones.
+
+### 4.5 Ollama / Local Model Runtime
+
+### Minimum controls
+- Keep local model endpoint private to studio VLAN; no public exposure.
+- Pin model versions used in automation-critical tasks.
+- Add regression safety tests when changing model/version for high-impact workflows.
 
 ---
 
-## Definition of Done (Secure-by-Design)
+## 5) Data Security-by-Design
 
-A workflow/integration is considered secure-by-design when all of the following are true:
+### 5.1 Data classification tags (machine enforceable)
 
-- Access is least-privilege and time-bounded.
-- Secrets are never hardcoded and are rotation-ready.
-- High-risk actions require explicit authorization.
-- Every critical action is auditable end-to-end.
-- Third-party components are pinned, reviewed, and continuously monitored.
-- Failure modes are tested via drills, not only documented.
+Use mandatory tags for each artifact/payload:
+- `public`
+- `studio-internal`
+- `restricted`
+- `prohibited-for-cloud`
+
+### 5.2 Routing policy
+- `restricted` and `prohibited-for-cloud` data may only be processed by approved local models/services.
+- Third-party LLM/API calls must include redaction stage + DLP checks.
+- Logs must be secret-scrubbed before storage/export.
+
+### 5.3 Provenance + integrity
+- Track source provenance for NotebookLM/Obsidian/GitHub imported context.
+- Mark low-trust sources to reduce agent action authority.
+
+---
+
+## 6) Future-Resilient AI Security Guardrails
+
+To harden against evolving AI threats:
+
+1. **Policy isolation from model behavior**
+   - Keep security policy enforcement external to the model output.
+
+2. **Canary secrets and honey workflows**
+   - Detect exfil attempts and unauthorized traversal early.
+
+3. **Adversarial test suite**
+   - Maintain prompt-injection, context-poisoning, and unsafe-tool-use test corpus.
+
+4. **Model/update gate**
+   - No model/tool version upgrade without security regression tests.
+
+5. **Continuous red-team cadence**
+   - Quarterly AI red-team simulation across key workflows.
+
+---
+
+## 7) 90-Day Hardening Plan (Concrete)
+
+### Days 0-14 (Foundational lock-in)
+- Build zone diagram + enforce firewall/egress rules matching trust zones.
+- Implement webhook signature + replay checks on all inbound webhooks.
+- Create MCP allowlist inventory and pin current server versions.
+- Enable secret scanning and dependency scanning in CI.
+
+### Days 15-45 (Control enforcement)
+- Add authorization policy for action classes and approval gates.
+- Segment n8n workflows into public vs privileged lanes.
+- Introduce end-to-end trace IDs and central log correlation.
+- Implement destination allowlists for outbound HTTP calls.
+
+### Days 46-90 (Resilience + validation)
+- Run first AI security tabletop + technical simulation.
+- Add adversarial prompt/context test suite to CI.
+- Validate break-glass procedures for key compromise and workflow takeover.
+- Define SLOs for detection, containment, and recovery.
+
+---
+
+## 8) Security Acceptance Criteria (No-Compromise Bar)
+
+A workflow is approved only if all are true:
+
+- Identity is least-privilege and scoped to a single function.
+- Secrets are managed centrally and rotation is automated/tested.
+- Input is authenticated, validated, and policy-checked before action.
+- High-risk actions require explicit human authorization.
+- Execution context is sandboxed with restricted file/network access.
+- Full audit trail exists with traceable approvals and outcomes.
+- Failure/abuse paths are tested (not only documented).
+
+---
+
+## 9) Recommended New Repo Artifacts
+
+To operationalize this blueprint, add:
+
+1. `docs/SECURITY_ARCHITECTURE.md` (zones, trust boundaries, data flows)
+2. `docs/AI_THREAT_MODEL.md` (threat trees + abuse cases)
+3. `docs/AI_SECURITY_TEST_PLAN.md` (injection and escalation tests)
+4. `security/mcp-allowlist.json` (pinning + review metadata)
+5. `security/policies/action-authorization.rego` (or equivalent policy spec)
+6. `docs/INCIDENT_RUNBOOKS.md` (key compromise, poisoned context, workflow hijack)
 
