@@ -1,0 +1,143 @@
+{
+  "name": "Monthly Ecosystem Review",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * 1#1"
+            }
+          ]
+        }
+      },
+      "name": "Schedule: First Monday 9am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [250, 300],
+      "typeVersion": 1,
+      "notes": "Triggers on the first Monday of each month at 9am GMT"
+    },
+    {
+      "parameters": {
+        "url": "https://www.pulsemcp.com/servers/feed",
+        "method": "GET",
+        "options": {}
+      },
+      "name": "Fetch PulseMCP RSS",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300],
+      "typeVersion": 1,
+      "notes": "Get latest MCP server releases from PulseMCP directory"
+    },
+    {
+      "parameters": {
+        "url": "https://n8n.io/integrations/feed",
+        "method": "GET",
+        "options": {}
+      },
+      "name": "Fetch n8n Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 450],
+      "typeVersion": 1,
+      "notes": "Get latest n8n integration announcements"
+    },
+    {
+      "parameters": {
+        "url": "https://releasebot.io/api/updates/cursor",
+        "method": "GET",
+        "options": {}
+      },
+      "name": "Fetch Cursor Release Notes",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 600],
+      "typeVersion": 1,
+      "notes": "Get Cursor IDE release notes for the past month"
+    },
+    {
+      "parameters": {
+        "functionCode": "const now = new Date();\nconst month = now.toLocaleString('default', { month: 'long' });\nconst year = now.getFullYear();\n\n// Parse RSS/API responses\nconst mcpServers = $input.first().json.items || [];\nconst n8nIntegrations = $input.all()[1].json.items || [];\nconst cursorUpdates = $input.all()[2].json.releases || [];\n\n// Filter for relevant/new items (example logic)\nconst relevantMCP = mcpServers.filter(s => \n  s.tags?.includes('github') || \n  s.tags?.includes('knowledge') || \n  s.tags?.includes('automation')\n).slice(0, 10);\n\nconst issueBody = `\n# Monthly Tool Ecosystem Review - ${month} ${year}\n\n> **Auto-generated** by HeliOS-Studio monitoring workflow  \n> **Due:** End of this week  \n\n## Checklist\n\n### MCP Servers\n\n- [ ] Review [PulseMCP.com/servers](https://www.pulsemcp.com/servers) for new servers\n- [ ] Check if any of these new servers are relevant:\n\n${relevantMCP.map(s => `  - **${s.name}**: ${s.description} ([link](${s.url}))`).join('\\n')}\n\n- [ ] Test existing MCP servers still work:\n  - [ ] n8n MCP server\n  - [ ] NotebookLM MCP server (unofficial)\n  - [ ] Obsidian MCP server\n  - [ ] GitHub MCP server\n\n### Tool Updates\n\n- [ ] Review n8n integrations page for new native nodes\n- [ ] Check Cursor release notes: ${cursorUpdates.length} updates this month\n- [ ] Check Claude Desktop / Claude Code announcements\n- [ ] Check NotebookLM feature releases\n\n### Documentation\n\n- [ ] Update [INTEGRATIONS.md](../docs/INTEGRATIONS.md) with new capabilities\n- [ ] Update [PROJECT_MANAGEMENT.md](../docs/PROJECT_MANAGEMENT.md) if PM tools changed\n- [ ] Update \`LAST_REVIEWED\` date in INTEGRATIONS.md\n\n### Testing\n\n- [ ] Run end-to-end test: Perplexity → NotebookLM → Claude → GitHub\n- [ ] Verify all n8n workflows still execute\n- [ ] Check GitHub Projects automation still works\n\n## Notes\n\nAdd observations, breaking changes, or recommendations below:\n\n---\n\n**Auto-assigned to:** @zebadee2kk\n`;\n\nreturn {\n  json: {\n    title: `Monthly Tool Review - ${month} ${year}`,\n    body: issueBody,\n    labels: ['maintenance', 'ecosystem-review', 'automated'],\n    assignees: ['zebadee2kk']\n  }\n};"
+      },
+      "name": "Build Issue Body",
+      "type": "n8n-nodes-base.function",
+      "position": [650, 400],
+      "typeVersion": 1,
+      "notes": "Parse feeds and generate GitHub issue with checklist"
+    },
+    {
+      "parameters": {
+        "resource": "issue",
+        "operation": "create",
+        "owner": "zebadee2kk",
+        "repository": "HeliOS-Studio",
+        "title": "={{ $json.title }}",
+        "body": "={{ $json.body }}",
+        "labels": "={{ $json.labels }}",
+        "assignees": "={{ $json.assignees }}"
+      },
+      "name": "Create GitHub Issue",
+      "type": "n8n-nodes-base.github",
+      "position": [850, 400],
+      "typeVersion": 1,
+      "credentials": {
+        "githubApi": {
+          "id": "YOUR_GITHUB_CREDENTIAL_ID",
+          "name": "GitHub API (HeliOS)"
+        }
+      },
+      "notes": "Create issue in HeliOS-Studio repo with review checklist"
+    },
+    {
+      "parameters": {
+        "channel": "#helio-studio",
+        "text": "🔔 Monthly ecosystem review is due! Check GitHub issue: {{ $json.html_url }}",
+        "otherOptions": {}
+      },
+      "name": "Notify Slack (Optional)",
+      "type": "n8n-nodes-base.slack",
+      "position": [1050, 400],
+      "typeVersion": 1,
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_SLACK_CREDENTIAL_ID",
+          "name": "Slack (Personal)"
+        }
+      },
+      "notes": "Optional: Post reminder to Slack workspace"
+    }
+  ],
+  "connections": {
+    "Schedule: First Monday 9am": {
+      "main": [
+        [
+          {"node": "Fetch PulseMCP RSS", "type": "main", "index": 0},
+          {"node": "Fetch n8n Integrations", "type": "main", "index": 0},
+          {"node": "Fetch Cursor Release Notes", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Fetch PulseMCP RSS": {
+      "main": [[{"node": "Build Issue Body", "type": "main", "index": 0}]]
+    },
+    "Fetch n8n Integrations": {
+      "main": [[{"node": "Build Issue Body", "type": "main", "index": 0}]]
+    },
+    "Fetch Cursor Release Notes": {
+      "main": [[{"node": "Build Issue Body", "type": "main", "index": 0}]]
+    },
+    "Build Issue Body": {
+      "main": [[{"node": "Create GitHub Issue", "type": "main", "index": 0}]]
+    },
+    "Create GitHub Issue": {
+      "main": [[{"node": "Notify Slack (Optional)", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": ["heliOS-studio", "automation", "monitoring"],
+  "triggerCount": 0,
+  "updatedAt": "2026-03-09T09:30:00.000Z",
+  "versionId": "1"
+}
