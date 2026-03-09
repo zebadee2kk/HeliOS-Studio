@@ -453,4 +453,5 @@ services:
 
 ## Next Steps
 
-See [HARDWARE.md](HARDWARE.md) for workstation and homelab specs.
+- See [SECURE_BY_DESIGN_RECOMMENDATIONS.md](SECURE_BY_DESIGN_RECOMMENDATIONS.md) for prioritized hardening actions and implementation backlog.
+- See [HARDWARE.md](HARDWARE.md) for workstation and homelab specs.
