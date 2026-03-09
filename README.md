@@ -73,6 +73,7 @@ HeliOS Studio is a complete AI-powered development ecosystem that enables a solo
 - [Project Management with GitHub Projects](docs/PROJECT_MANAGEMENT.md) ✨ NEW
 - [Automation Patterns](docs/AUTOMATION.md)
 - [Security & Identity Management](docs/SECURITY.md)
+- [Secure-by-Design Recommendations](docs/SECURE_BY_DESIGN_RECOMMENDATIONS.md) ✨ NEW
 
 ### Reference
 - [MCP Integration Guide](docs/MCP.md)
