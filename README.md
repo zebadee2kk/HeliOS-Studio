@@ -1,3 +1,5 @@
+> **Archived 2026-09-28.** Concept/docs repository. The one reusable idea (a recurring ecosystem/tool review) is tracked in zebadee2kk/portfolio-management#70. Audit: zebadee2kk/portfolio-management#69.
+
 # HeliOS Studio
 
 > Personal AI R&D Lab - One-person AI-powered startup studio for discovery, research, architecture, prototyping, and deployment
